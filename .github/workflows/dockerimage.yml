@@ -1,0 +1,31 @@
+name: Docker Image CI
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: 
+      - master
+
+env: 
+  DOCKER_CLI_EXPERIMENTAL: enabled
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v1
+    - name: Login to Docker Hub
+      run: docker login -u ${username} -p ${password}
+      env:
+        username: ${{ secrets.DockerUsername }}
+        password: ${{ secrets.DockerPassword }}
+    - name: Create the builder and use it
+      run: docker buildx create --name cross --use
+    - name: Inspect the builder and initialize it
+      run: docker buildx inspect --bootstrap
+    - name: Build the Docker image
+      run: docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -t proegssilb/samba-domain:${GITHUB_REF} --push .
