@@ -1,6 +1,10 @@
 # Samba Active Directory Domain Controller for Docker
 
-A well documented, tried and tested Samba Active Directory Domain Controller that works with the standard Windows management tools; built from scratch using internal DNS and kerberos and not based on existing containers.
+Based on [Fmstrat's work](https://github.com/Fmstrat/samba-domain), which is extensively documented, and seems equipped to handle a wide variety of scenarious. This version adds repository-level automation and support for ARM. Increased compatibility with Docker Swarm and/or Kubernetes is the primary future goal.
+
+Most of the documentation in this README is pulled from the original repo.
+
+Any help testing would be appreciated, as I do not have resources to test beyond my particular setup.
 
 ## Environment variables for quick start
 
@@ -24,19 +28,9 @@ A well documented, tried and tested Samba Active Directory Domain Controller tha
 
 ## Downloading and building
 
-```bash
-mkdir -p /data/docker/builds
-cd /data/docker/builds
-git clone https://github.com/Fmstrat/samba-domain.git
-cd samba-domain
-docker build -t samba-domain .
-```
+You know where the clone button is. As of 2019, cross-platform building requires [enabling experimental features](https://stackoverflow.com/questions/57937733/how-to-enable-experimental-docker-cli-features).
 
-Or just use the HUB:
-
-```bash
-docker pull nowsci/samba-domain
-```
+This repo publishes to `proegssilb/samba-domain` on [Docker Hub](https://hub.docker.com/repository/docker/proegssilb/samba-domain).
 
 ## Setting things up for the container
 
@@ -64,138 +58,17 @@ cp /path/to/my/ovpn/MYSITE.ovpn /data/docker/containers/samba/config/openvpn/doc
 
 ## Enabling file sharing
 
-While the Samba team does not recommend using a DC as a file server, it's understandable that some may wish to. Once the container is up and running and your `/data/docker/containers/samba/config/samba/smb.conf` file is set up after the first run, you can enable shares by shutting down the container, and making the following changes to the `smb.conf` file.
+This repo doesn't support file sharing in the same container as the DC.
 
-In the `[global]` section, add:
-
-```conf
-        security = user
-        passdb backend = ldapsam:ldap://localhost
-        ldap suffix = dc=corp,dc=example,dc=com
-        ldap user suffix = ou=Users
-        ldap group suffix = ou=Groups
-        ldap machine suffix = ou=Computers
-        ldap idmap suffix = ou=Idmap
-        ldap admin dn = cn=Administrator,cn=Users,dc=corp,dc=example,dc=com
-        ldap ssl = off
-        ldap passwd sync = no
-        server string = MYSERVERHOSTNAME
-        wins support = yes
-        preserve case = yes
-        short preserve case = yes
-        default case = lower
-        case sensitive = auto
-        preferred master = yes
-        unix extensions = yes
-        follow symlinks = yes
-        client ntlmv2 auth = yes
-        client lanman auth = yes
-        mangled names = no
-```
-
-Then add a share to the end based on how you mount the volume:
-
-```conf
-[storage]
-        comment = storage
-        path = /storage
-        public = no
-        read only = no
-        writable = yes
-        write list = @root NOWSCI\myuser
-        force user = root
-        force group = root
-        guest ok = yes
-        valid users = NOWSCI\myuser
-```
-
-Check the samba documentation for how to allow groups/etc.
+We're dealing with containers. The Samba Team doesn't encourage file sharing on the same machine as a domain controller, it's easy enough to spin up a second container. If you want to do this, consult [Fmstrat's README](https://github.com/Fmstrat/samba-domain) and the official Samba wiki.
 
 ## Keeping things updated
 
-The container is stateless, so you can do a `docker rmi samba-domain` and then restart the container to rebuild packages when a security update occurs. However, this puts load on servers that isn't always required, so below are some scripts that can help minimize things by letting you know when containers have security updates that are required.
-
-This script loops through running containers and sends you an email when security updates are required.
-
-```bash
-#!/bin/bash
-
-
-function needsUpdates() {
-        RESULT=$(docker exec ${1} bash -c ' \
-                if [[ -f /etc/apt/sources.list ]]; then \
-                grep security /etc/apt/sources.list > /tmp/security.list; \
-                apt-get update > /dev/null; \
-                apt-get upgrade -oDir::Etc::Sourcelist=/tmp/security.list -s; \
-                fi; \
-                ')
-        RESULT=$(echo $RESULT)
-        GOODRESULT="Reading package lists... Building dependency tree... Reading state information... Calculating upgrade... 0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded."
-        if [[ "${RESULT}" != "" ]] && [[ "${RESULT}" != "${GOODRESULT}" ]]; then
-                return 0
-        else
-                return 1
-        fi
-}
-
-function sendEmail() {
-        echo "Container ${1} needs security updates";
-        H=`hostname`
-        ssh -i /data/keys/<KEYFILE> <USRER>@<REMOTEHOST>.com "{ echo \"MAIL FROM: root@${H}\"; echo \"RCPT TO: <USER>@<EMAILHOST>.com\"; echo \"DATA\"; echo \"Subject: ${H} - ${1} container needs security update\"; echo \"\"; echo -e \"\n${1} container needs update.\n\n\"; echo -e \"docker exec ${1} bash -c 'grep security /etc/apt/sources.list > /tmp/security.list; apt-get update > /dev/null; apt-get upgrade -oDir::Etc::Sourcelist=/tmp/security.list -s'\n\n\"; echo \"Remove the -s to run the update\"; echo \"\"; echo \".\"; echo \"quit\"; sleep 1; } | telnet <SMTPHOST> 25"
-}
-
-CONTAINERS=$(docker ps --format "{{.Names}}")
-for CONTAINER in $CONTAINERS; do
-        echo "Checking ${CONTAINER}"
-        if needsUpdates $CONTAINER; then
-                sendEmail $CONTAINER
-        fi
-done
-```
-
-And the following script keeps track of when new images are posted to hub.docker.com.
-
-```bash
-#!/bin/bash
-
-DATAPATH='/data/docker/updater/data'
-
-if [ ! -d "${DATAPATH}" ]; then
-        mkdir "${DATAPATH}";
-fi
-IMAGES=$(docker ps --format "{{.Image}}")
-for IMAGE in $IMAGES; do
-        ORIGIMAGE=${IMAGE}
-        if [[ "$IMAGE" != *\/* ]]; then
-                IMAGE=library/${IMAGE}
-        fi
-        IMAGE=${IMAGE%%:*}
-        echo "Checking ${IMAGE}"
-        PARSED=${IMAGE//\//.}
-        if [ ! -f "${DATAPATH}/${PARSED}" ]; then
-                # File doesn't exist yet, make baseline
-                echo "Setting baseline for ${IMAGE}"
-                curl -s "https://registry.hub.docker.com/v2/repositories/${IMAGE}/tags/" > "${DATAPATH}/${PARSED}"
-        else
-                # File does exist, do a compare
-                NEW=$(curl -s "https://registry.hub.docker.com/v2/repositories/${IMAGE}/tags/")
-                OLD=$(cat "${DATAPATH}/${PARSED}")
-                if [[ "${OLD}" == "${NEW}" ]]; then
-                        echo "Image ${IMAGE} is up to date";
-                else
-                        echo ${NEW} > "${DATAPATH}/${PARSED}"
-                        echo "Image ${IMAGE} needs to be updated";
-                        H=`hostname`
-                        ssh -i /data/keys/<KEYFILE> <USER>@<REMOTEHOST>.com "{ echo \"MAIL FROM: root@${H}\"; echo \"RCPT TO: <USER>@<EMAILHOST>.com\"; echo \"DATA\"; echo \"Subject: ${H} - ${IMAGE} needs update\"; echo \"\"; echo -e \"\n${IMAGE} needs update.\n\ndocker pull ${ORIGIMAGE}\"; echo \"\"; echo \".\"; echo \"quit\"; sleep 1; } | telnet <SMTPHOST> 25"
-                fi
-
-        fi
-done;
-```
+The container is stateless, so you can do a `docker rmi samba-domain` and then restart the container to get the latest published build. However, [Fmstrat's README](https://github.com/Fmstrat/samba-domain) provides some scripts that can reduce the amount of time you spend downloading/building containers.
 
 ## Examples with docker run
 
-Keep in mind, for all examples replace `nowsci/samba-domain` with `samba-domain` if you build your own from GitHub.
+Keep in mind, for all examples replace `proegssilb/samba-domain` with `samba-domain` if you build your own from GitHub.
 
 Start a new domain, and forward non-resolvable queries to the main DNS server
 
@@ -234,7 +107,7 @@ docker run -t -i \
  -h localdc \
  --name samba \
  --privileged \
- nowsci/samba-domain
+ proegssilb/samba-domain
 ```
 
 Join an existing domain, and forward non-resolvable queries to the main DNS server
@@ -277,7 +150,7 @@ docker run -t -i \
  -h localdc \
  --name samba \
  --privileged \
- nowsci/samba-domain
+ proegssilb/samba-domain
 ```
 
 Join an existing domain, forward DNS, remove security features, and connect to a remote site via openvpn
@@ -331,10 +204,12 @@ docker run -t -i \
  --name samba \
  --privileged \
  --cap-add=NET_ADMIN --device /dev/net/tun \
- nowsci/samba-domain
+ proegssilb/samba-domain
 ```
 
 ## Examples with docker compose
+
+**THIS SECTION NEEDS TO BE UPDATED FOR UPDATED DOCKER COMPOSE VERSIONS**
 
 Keep in mind for all examples `DOMAINPASS` can be removed after the first run.
 
@@ -356,7 +231,7 @@ services:
 # ----------- samba begin ----------- #
 
   samba:
-    image: nowsci/samba-domain
+    image: proegssilb/samba-domain
     container_name: samba
     volumes:
       - /etc/localtime:/etc/localtime:ro
@@ -422,7 +297,7 @@ services:
 # ----------- samba begin ----------- #
 
   samba:
-    image: nowsci/samba-domain
+    image: proegssilb/samba-domain
     container_name: samba
     volumes:
       - /etc/localtime:/etc/localtime:ro
@@ -492,7 +367,7 @@ services:
 # ----------- samba begin ----------- #
 
   samba:
-    image: nowsci/samba-domain
+    image: proegssilb/samba-domain
     container_name: samba
     volumes:
       - /etc/localtime:/etc/localtime:ro
