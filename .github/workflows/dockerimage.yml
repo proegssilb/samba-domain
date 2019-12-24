@@ -7,24 +7,20 @@ on:
     branches: 
       - master
 
-env: 
-  DOCKER_CLI_EXPERIMENTAL: enabled
-
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v1
-    - name: Diagnostic docker info
-      run: docker version && docker --help
+    - name: Docker Buildx
+      uses: crazy-max/ghaction-docker-buildx@v1.0.5
     - name: Login to Docker Hub
       run: docker login -u ${username} -p ${password}
       env:
         username: ${{ secrets.DockerUsername }}
         password: ${{ secrets.DockerPassword }}
+    - name: Diagnostic docker info
+      run: docker version && docker --help
     - name: Create the builder and use it
       run: docker buildx create --name cross --use
     - name: Inspect the builder and initialize it
