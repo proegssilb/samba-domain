@@ -26,4 +26,4 @@ jobs:
     - name: Inspect the builder and initialize it
       run: docker buildx inspect --bootstrap
     - name: Build the Docker image
-      run: docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -t proegssilb/samba-domain:${GITHUB_REF} --push .
+      run: docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -t proegssilb/samba-domain:$(date -u %s) --push .
